@@ -1,5 +1,3 @@
-// Vercel KV-backed job store.
-// Falls back to a local file-based store when running locally (no KV env vars).
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -10,28 +8,38 @@ export interface JobEntry {
   pdfPath: string | null;
   filename: string;
   createdAt: number;
-  // On Vercel we store the file as base64 inside KV (files don't persist on serverless)
   docxBase64?: string;
 }
 
-// ── Vercel KV helpers ────────────────────────────────────────────────────────
-// Imported lazily so the app still works locally without @vercel/kv installed.
-
+// ── Upstash Redis helpers ────────────────────────────────────────────────────
 async function kvSet(jobId: string, entry: JobEntry) {
-  const { kv } = await import("@vercel/kv");
-  await kv.set(`cdr:${jobId}`, JSON.stringify(entry), { ex: 600 }); // 10 min TTL
+  const { Redis } = await import("@upstash/redis");
+  const redis = new Redis({
+    url: process.env.UPSTASH_REDIS_REST_URL!,
+    token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+  });
+  await redis.set(`cdr:${jobId}`, JSON.stringify(entry), { ex: 600 });
 }
 
 async function kvGet(jobId: string): Promise<JobEntry | undefined> {
-  const { kv } = await import("@vercel/kv");
-  const raw = await kv.get<string>(`cdr:${jobId}`);
+  const { Redis } = await import("@upstash/redis");
+  const redis = new Redis({
+    url: process.env.UPSTASH_REDIS_REST_URL!,
+    token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+  });
+  const raw = await redis.get<string>(`cdr:${jobId}`);
   if (!raw) return undefined;
-  return JSON.parse(raw) as JobEntry;
+  const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+  return parsed as JobEntry;
 }
 
 async function kvDel(jobId: string) {
-  const { kv } = await import("@vercel/kv");
-  await kv.del(`cdr:${jobId}`);
+  const { Redis } = await import("@upstash/redis");
+  const redis = new Redis({
+    url: process.env.UPSTASH_REDIS_REST_URL!,
+    token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+  });
+  await redis.del(`cdr:${jobId}`);
 }
 
 // ── Local file-based fallback ────────────────────────────────────────────────
@@ -59,19 +67,17 @@ function localDel(jobId: string) {
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
-const isVercel = !!process.env.KV_REST_API_URL;
+const isVercel = !!process.env.UPSTASH_REDIS_REST_URL;
 
 export const jobStore = {
   async set(jobId: string, entry: JobEntry) {
     if (isVercel) await kvSet(jobId, entry);
     else localSet(jobId, entry);
   },
-
   async get(jobId: string): Promise<JobEntry | undefined> {
     if (isVercel) return kvGet(jobId);
     return localGet(jobId);
   },
-
   async delete(jobId: string) {
     if (isVercel) await kvDel(jobId);
     else localDel(jobId);
