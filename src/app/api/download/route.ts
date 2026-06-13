@@ -27,57 +27,31 @@ export async function GET(req: NextRequest) {
     : path.basename(job.filename, ".docx");
 
   try {
-    if (type === "docx") {
-      let buffer: Buffer;
+    if (type === "docx" || type === "zip") {
+      let uint8: Uint8Array;
 
-      // On Vercel: reconstruct from base64 stored in KV
       if (job.docxBase64) {
-        buffer = Buffer.from(job.docxBase64, "base64");
+        uint8 = new Uint8Array(Buffer.from(job.docxBase64, "base64"));
       } else if (job.docxPath && fs.existsSync(job.docxPath)) {
-        buffer = fs.readFileSync(job.docxPath);
+        uint8 = new Uint8Array(fs.readFileSync(job.docxPath));
       } else {
         return NextResponse.json({ error: "DOCX file not found" }, { status: 404 });
       }
 
-      // Clean up after download
-      if (job.docxPath) {
-        try { cleanupNow(job.workDir); } catch {}
-      }
+      try { cleanupNow(job.workDir); } catch {}
       await jobStore.delete(jobId);
 
-      return new NextResponse(buffer, {
+      return new NextResponse(uint8, {
         headers: {
           "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
           "Content-Disposition": `attachment; filename="${baseName}.docx"`,
-          "Content-Length": buffer.length.toString(),
+          "Content-Length": uint8.length.toString(),
         },
       });
     }
 
     if (type === "pdf") {
       return NextResponse.json({ error: "PDF not available" }, { status: 404 });
-    }
-
-    if (type === "zip") {
-      // ZIP = just DOCX on Vercel (no PDF)
-      let buffer: Buffer;
-      if (job.docxBase64) {
-        buffer = Buffer.from(job.docxBase64, "base64");
-      } else if (job.docxPath && fs.existsSync(job.docxPath)) {
-        buffer = fs.readFileSync(job.docxPath);
-      } else {
-        return NextResponse.json({ error: "DOCX file not found" }, { status: 404 });
-      }
-
-      // Return DOCX directly when there's nothing to zip alongside it
-      await jobStore.delete(jobId);
-      return new NextResponse(buffer, {
-        headers: {
-          "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-          "Content-Disposition": `attachment; filename="${baseName}.docx"`,
-          "Content-Length": buffer.length.toString(),
-        },
-      });
     }
 
     return NextResponse.json({ error: "Invalid type" }, { status: 400 });
